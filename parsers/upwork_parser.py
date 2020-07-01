@@ -51,3 +51,6 @@ def main():
     with open("upwork_jobs.json", "w") as f:
         json.dump(parsed_jobs_data, f)
 
+
+if __name__ == '__main__':
+    main()
