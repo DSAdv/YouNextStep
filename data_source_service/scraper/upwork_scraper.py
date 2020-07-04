@@ -1,3 +1,6 @@
+import datetime
+
+import dateparser
 import feedparser
 import json
 import pandas as pd
@@ -6,19 +9,29 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from urllib.parse import urlencode
 
+SCRAPING_PAGE_NUM = 10
+WORKERS_NUM = 100
 
-SCRAPING_PAGE_NUM = 38
-WORKERS_NUM = 50
 
-
-def get_data_from_source():
-    jobs = []
+def get_data_from_source(from_date: datetime.datetime):
+    jobs = list()
+    utc = datetime.timezone.utc
 
     for i in tqdm(range(SCRAPING_PAGE_NUM)):
         upwork_jobs = feedparser.parse(generate_upwork_rss_link(i * 100))
         jobs.extend(upwork_jobs["entries"])
 
-    return jobs
+    with ThreadPoolExecutor(max_workers=WORKERS_NUM) as pool:
+        tasks = [pool.submit(prepare_parsed_record, job_json) for job_json in jobs]
+        parsed_jobs_data = [task.result() for task in tqdm(tasks)]
+
+    if from_date is not utc:
+        from_date = from_date.replace(tzinfo=utc)
+
+    df = pd.DataFrame(parsed_jobs_data)
+    df["published"] = df["published"].map(lambda x: x.replace(tzinfo=utc))
+
+    return df[df["published"] > from_date].to_dict(orient="records")
 
 
 def generate_upwork_rss_link(offset: int = 1):
@@ -37,20 +50,11 @@ def generate_upwork_rss_link(offset: int = 1):
     return rss_url
 
 
-def parse_job_element(job_json: dict):
-    return job_json
-
-
-def main():
-    jobs_data = get_data_from_source()
-
-    with ThreadPoolExecutor(max_workers=WORKERS_NUM) as pool:
-        tasks = [pool.submit(parse_job_element, job_json) for job_json in jobs_data]
-        parsed_jobs_data = [task.result() for task in tqdm(tasks)]
-
-    with open("upwork_jobs.json", "w") as f:
-        json.dump(parsed_jobs_data, f)
-
-
-if __name__ == '__main__':
-    main()
+def prepare_parsed_record(record: dict):
+    return {
+        "title": record["title"].strip("- Upwork"),
+        "link": record["link"],
+        "summary": record["summary"],
+        "published": dateparser.parse(record["published"]),
+        "parsed": datetime.datetime.now(),
+    }
